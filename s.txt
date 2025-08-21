@@ -1,0 +1,375 @@
+-- MPO-level per-metric rollups
+IF OBJECT_ID('dbo.Agg_MPO_Metric','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.Agg_MPO_Metric (
+    period_key        int         NOT NULL,
+    mpo_id            int         NOT NULL,
+    complianceitemid  int         NOT NULL,
+    sum_weighted_pts  decimal(19,6) NOT NULL,
+    total_weight      decimal(19,6) NOT NULL,
+    metric_weighted_avg AS (CASE WHEN total_weight = 0 THEN NULL ELSE sum_weighted_pts / total_weight END) PERSISTED,
+    CONSTRAINT PK_Agg_MPO_Metric PRIMARY KEY (period_key, mpo_id, complianceitemid)
+  );
+END;
+
+-- Area-level per-metric rollups
+IF OBJECT_ID('dbo.Agg_Area_Metric','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.Agg_Area_Metric (
+    period_key        int         NOT NULL,
+    area_id           int         NOT NULL,
+    complianceitemid  int         NOT NULL,
+    sum_weighted_pts  decimal(19,6) NOT NULL,
+    total_weight      decimal(19,6) NOT NULL,
+    metric_weighted_avg AS (CASE WHEN total_weight = 0 THEN NULL ELSE sum_weighted_pts / total_weight END) PERSISTED,
+    CONSTRAINT PK_Agg_Area_Metric PRIMARY KEY (period_key, area_id, complianceitemid)
+  );
+END;
+
+-- Region-level per-metric rollups
+IF OBJECT_ID('dbo.Agg_Region_Metric','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.Agg_Region_Metric (
+    period_key        int         NOT NULL,
+    region_id         int         NOT NULL,
+    complianceitemid  int         NOT NULL,
+    sum_weighted_pts  decimal(19,6) NOT NULL,
+    total_weight      decimal(19,6) NOT NULL,
+    metric_weighted_avg AS (CASE WHEN total_weight = 0 THEN NULL ELSE sum_weighted_pts / total_weight END) PERSISTED,
+    CONSTRAINT PK_Agg_Region_Metric PRIMARY KEY (period_key, region_id, complianceitemid)
+  );
+END;
+
+CREATE OR ALTER PROCEDURE dbo.Build_Rollups @PeriodKey int AS
+BEGIN
+  SET NOCOUNT ON; SET XACT_ABORT ON;
+
+  -- MPO
+  DELETE FROM dbo.Agg_MPO_Metric WHERE period_key = @PeriodKey;
+  INSERT dbo.Agg_MPO_Metric (period_key, mpo_id, complianceitemid, sum_weighted_pts, total_weight)
+  SELECT
+    ss.period_key,
+    dp.mpo_id,
+    ss.complianceitemid,
+    SUM(ss.weighted_points) AS sum_weighted_pts,
+    SUM(ss.weight_basis)    AS total_weight
+  FROM dbo.ScoreSnapshot ss
+  JOIN dbo.DimPerson dp ON dp.person_id = ss.person_id
+  WHERE ss.period_key = @PeriodKey
+  GROUP BY ss.period_key, dp.mpo_id, ss.complianceitemid;
+
+  -- Area
+  DELETE FROM dbo.Agg_Area_Metric WHERE period_key = @PeriodKey;
+  INSERT dbo.Agg_Area_Metric (period_key, area_id, complianceitemid, sum_weighted_pts, total_weight)
+  SELECT
+    ss.period_key,
+    dp.area_id,
+    ss.complianceitemid,
+    SUM(ss.weighted_points),
+    SUM(ss.weight_basis)
+  FROM dbo.ScoreSnapshot ss
+  JOIN dbo.DimPerson dp ON dp.person_id = ss.person_id
+  WHERE ss.period_key = @PeriodKey
+  GROUP BY ss.period_key, dp.area_id, ss.complianceitemid;
+
+  -- Region
+  DELETE FROM dbo.Agg_Region_Metric WHERE period_key = @PeriodKey;
+  INSERT dbo.Agg_Region_Metric (period_key, region_id, complianceitemid, sum_weighted_pts, total_weight)
+  SELECT
+    ss.period_key,
+    dp.region_id,
+    ss.complianceitemid,
+    SUM(ss.weighted_points),
+    SUM(ss.weight_basis)
+  FROM dbo.ScoreSnapshot ss
+  JOIN dbo.DimPerson dp ON dp.person_id = ss.person_id
+  WHERE ss.period_key = @PeriodKey
+  GROUP BY ss.period_key, dp.region_id, ss.complianceitemid;
+END;
+GO
+
+CREATE OR ALTER PROCEDURE dbo.Build_Rollups @PeriodKey int AS
+BEGIN
+  SET NOCOUNT ON; SET XACT_ABORT ON;
+
+  -- MPO
+  DELETE FROM dbo.Agg_MPO_Metric WHERE period_key = @PeriodKey;
+  INSERT dbo.Agg_MPO_Metric (period_key, mpo_id, complianceitemid, sum_weighted_pts, total_weight)
+  SELECT
+    ss.period_key,
+    dp.mpo_id,
+    ss.complianceitemid,
+    SUM(ss.weighted_points) AS sum_weighted_pts,
+    SUM(ss.weight_basis)    AS total_weight
+  FROM dbo.ScoreSnapshot ss
+  JOIN dbo.DimPerson dp ON dp.person_id = ss.person_id
+  WHERE ss.period_key = @PeriodKey
+  GROUP BY ss.period_key, dp.mpo_id, ss.complianceitemid;
+
+  -- Area
+  DELETE FROM dbo.Agg_Area_Metric WHERE period_key = @PeriodKey;
+  INSERT dbo.Agg_Area_Metric (period_key, area_id, complianceitemid, sum_weighted_pts, total_weight)
+  SELECT
+    ss.period_key,
+    dp.area_id,
+    ss.complianceitemid,
+    SUM(ss.weighted_points),
+    SUM(ss.weight_basis)
+  FROM dbo.ScoreSnapshot ss
+  JOIN dbo.DimPerson dp ON dp.person_id = ss.person_id
+  WHERE ss.period_key = @PeriodKey
+  GROUP BY ss.period_key, dp.area_id, ss.complianceitemid;
+
+  -- Region
+  DELETE FROM dbo.Agg_Region_Metric WHERE period_key = @PeriodKey;
+  INSERT dbo.Agg_Region_Metric (period_key, region_id, complianceitemid, sum_weighted_pts, total_weight)
+  SELECT
+    ss.period_key,
+    dp.region_id,
+    ss.complianceitemid,
+    SUM(ss.weighted_points),
+    SUM(ss.weight_basis)
+  FROM dbo.ScoreSnapshot ss
+  JOIN dbo.DimPerson dp ON dp.person_id = ss.person_id
+  WHERE ss.period_key = @PeriodKey
+  GROUP BY ss.period_key, dp.region_id, ss.complianceitemid;
+END;
+GO
+
+
+
+Core measures on the atomic table
+
+Metric Weighted Score :=
+DIVIDE( SUM(ScoreSnapshot[weighted_points]), SUM(ScoreSnapshot[weight_basis]) )
+
+MLO Total Score (Sum of Points) :=
+SUM(ScoreSnapshot[final_score])
+
+
+Helper measures to read from the agg tables (filtered via TREATAS)
+
+-- Common filters
+__SelMetrics :=
+VALUES(DimMetric[complianceitemid])
+
+__SelPeriod :=
+VALUES(DimDate[period_key])
+
+-- MPO rollup: sum of per-metric weighted avgs from Agg_MPO_Metric
+Rollup – MPO (Sum of Metric Avgs) :=
+VAR SelMPO = VALUES(DimPerson[mpo_id])
+RETURN
+SUMX(
+    [__SelMetrics],
+    CALCULATE(
+        MAX( Agg_MPO_Metric[metric_weighted_avg] ),    -- one value per metric after filters
+        TREATAS( [__SelPeriod],  Agg_MPO_Metric[period_key] ),
+        TREATAS( SelMPO,         Agg_MPO_Metric[mpo_id] ),
+        TREATAS( [__SelMetrics], Agg_MPO_Metric[complianceitemid] )
+    )
+)
+
+-- Area rollup:
+Rollup – Area (Sum of Metric Avgs) :=
+VAR SelArea = VALUES(DimPerson[area_id])
+RETURN
+SUMX(
+    [__SelMetrics],
+    CALCULATE(
+        MAX( Agg_Area_Metric[metric_weighted_avg] ),
+        TREATAS( [__SelPeriod],  Agg_Area_Metric[period_key] ),
+        TREATAS( SelArea,        Agg_Area_Metric[area_id] ),
+        TREATAS( [__SelMetrics], Agg_Area_Metric[complianceitemid] )
+    )
+)
+
+-- Region rollup:
+Rollup – Region (Sum of Metric Avgs) :=
+VAR SelRegion = VALUES(DimPerson[region_id])
+RETURN
+SUMX(
+    [__SelMetrics],
+    CALCULATE(
+        MAX( Agg_Region_Metric[metric_weighted_avg] ),
+        TREATAS( [__SelPeriod],   Agg_Region_Metric[period_key] ),
+        TREATAS( SelRegion,       Agg_Region_Metric[region_id] ),
+        TREATAS( [__SelMetrics],  Agg_Region_Metric[complianceitemid] )
+    )
+)
+
+
+One display measure that auto-picks the right path
+
+Score (Display) :=
+SWITCH(
+    TRUE(),
+    -- Metric present -> per-metric weighted avg (atomic)
+    ISINSCOPE(DimMetric[complianceitemid]), [Metric Weighted Score],
+
+    -- MLO present (no metric) -> sum of that MLO's metric points (atomic)
+    ISINSCOPE(DimPerson[person_id]),        [MLO Total Score (Sum of Points)],
+
+    -- MPO level
+    ISINSCOPE(DimPerson[mpo_id]),           [Rollup – MPO (Sum of Metric Avgs)],
+
+    -- Area level
+    ISINSCOPE(DimPerson[area_id]),          [Rollup – Area (Sum of Metric Avgs)],
+
+    -- Region level
+    ISINSCOPE(DimPerson[region_id]),        [Rollup – Region (Sum of Metric Avgs)],
+
+    -- Org-wide (no level selected) → sum over metrics across all regions
+    SUMX([__SelMetrics],
+         CALCULATE(
+            DIVIDE( SUM(ScoreSnapshot[weighted_points]), SUM(ScoreSnapshot[weight_basis]) ),
+            ALL(DimPerson)   -- org view ignores person hierarchy
+         )
+    )
+
+
+2) SQL you can run
+A) DimMetric (with category)
+/* If you don't already have a category on ComplianceItems, add it */
+IF COL_LENGTH('dbo.ComplianceItems','metric_category') IS NULL
+    ALTER TABLE dbo.ComplianceItems
+    ADD metric_category nvarchar(100) NULL;
+
+-- Optional: default to 'Uncategorized' where NULL
+UPDATE dbo.ComplianceItems
+SET metric_category = ISNULL(metric_category, 'Uncategorized')
+WHERE metric_category IS NULL;
+
+/* Dimension view for PBI */
+CREATE OR ALTER VIEW dbo.v_DimMetric AS
+SELECT
+    ci.complianceitemid                 AS metric_id,
+    ci.name                             AS metric_name,
+    ISNULL(ci.metric_category,'Uncategorized') AS metric_category,
+    ci.ismanual,
+    ci.active,
+    ci.createdat
+FROM dbo.ComplianceItems ci;
+
+
+In PBI, build the hierarchy Metric Category → Metric from this view.
+
+B) DimPerson (flattened org hierarchy)
+
+Point this at your actual org mapping. If you already have normalized tables (Region/Area/MPO/MLO), create a flattened view. Below assumes a single table PersonOrg you maintain (rename as needed).
+
+/* Example staging/table you can maintain from HR feed */
+-- PersonOrg(person_id, mlo_name, mpo_id, mpo_name, area_id, area_name, region_id, region_name, is_active, startdate, enddate)
+-- If you already have these, skip this DDL.
+
+-- CREATE TABLE dbo.PersonOrg ( ... );
+
+/* Dimension view for PBI (flattened) */
+CREATE OR ALTER VIEW dbo.v_DimPerson AS
+SELECT
+    po.person_id,
+    po.mlo_name,
+    po.mpo_id,
+    po.mpo_name,
+    po.area_id,
+    po.area_name,
+    po.region_id,
+    po.region_name,
+    CAST(po.is_active AS bit) AS is_active
+FROM dbo.PersonOrg po
+-- If you want "active as of last day of period", keep it simple in PBI using slicers,
+-- or extend this view later to date-effective filter.
+;
+
+
+In PBI create a Hierarchy: region_name → area_name → mpo_name → mlo_name.
+
+C) Fact for PBI (atomic score fact)
+/* Thin view over ScoreSnapshot for PBI */
+CREATE OR ALTER VIEW dbo.v_FactScore AS
+SELECT
+    ss.snapshot_id,
+    ss.period_key,             -- YYYYMM
+    ss.person_id,              -- MLO id
+    ss.complianceitemid AS metric_id,
+    ss.raw_points,
+    ss.penalties,
+    ss.final_score,            -- per-metric points for the MLO in the period
+    ss.weight_basis,           -- denominator (attempts / loan count)
+    ss.weighted_points,        -- final_score * weight_basis
+    ss.complianceitemversionid,
+    ss.locked_bit,
+    ss.calc_utc
+FROM dbo.ScoreSnapshot ss;
+
+
+Relationships in PBI:
+
+v_FactScore[person_id] → v_DimPerson[person_id] (many→one)
+
+v_FactScore[metric_id] → v_DimMetric[metric_id]
+
+v_FactScore[period_key] → your Date table [period_key] (int YYYYMM)
+
+D) (Optional) Agg views for rollups you materialized
+
+If you created the SQL rollup tables earlier (Agg_MPO_Metric, Agg_Area_Metric, Agg_Region_Metric), expose them as views for PBI:
+
+CREATE OR ALTER VIEW dbo.v_Agg_MPO_Metric AS
+SELECT period_key, mpo_id, complianceitemid AS metric_id,
+       sum_weighted_pts, total_weight,
+       metric_weighted_avg
+FROM dbo.Agg_MPO_Metric;
+
+CREATE OR ALTER VIEW dbo.v_Agg_Area_Metric AS
+SELECT period_key, area_id, complianceitemid AS metric_id,
+       sum_weighted_pts, total_weight,
+       metric_weighted_avg
+FROM dbo.Agg_Area_Metric;
+
+CREATE OR ALTER VIEW dbo.v_Agg_Region_Metric AS
+SELECT period_key, region_id, complianceitemid AS metric_id,
+       sum_weighted_pts, total_weight,
+       metric_weighted_avg
+FROM dbo.Agg_Region_Metric;
+
+
+Load these into PBI without relationships (disconnected). Your display measure can use TREATAS to read them when at MPO/Area/Region context (we already wrote that pattern).
+
+E) Helpful indexes (speed up loads/joins)
+-- Fact joins
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_SS_Period_Person_Metric')
+  CREATE INDEX IX_SS_Period_Person_Metric
+  ON dbo.ScoreSnapshot(period_key, person_id, complianceitemid)
+  INCLUDE (final_score, weight_basis, weighted_points, locked_bit, complianceitemversionid);
+
+-- Dim lookups (if table is large)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_PersonOrg_Person')
+  CREATE INDEX IX_PersonOrg_Person ON dbo.PersonOrg(person_id);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_ComplianceItems_Id')
+  CREATE INDEX IX_ComplianceItems_Id ON dbo.ComplianceItems(complianceitemid);
+
+-- Aggs (if using)
+IF OBJECT_ID('dbo.Agg_MPO_Metric','U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Agg_MPO_Period')
+  CREATE INDEX IX_Agg_MPO_Period ON dbo.Agg_MPO_Metric(period_key, mpo_id, complianceitemid);
+
+IF OBJECT_ID('dbo.Agg_Area_Metric','U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Agg_Area_Period')
+  CREATE INDEX IX_Agg_Area_Period ON dbo.Agg_Area_Metric(period_key, area_id, complianceitemid);
+
+IF OBJECT_ID('dbo.Agg_Region_Metric','U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Agg_Region_Period')
+  CREATE INDEX IX_Agg_Region_Period ON dbo.Agg_Region_Metric(period_key, region_id, complianceitemid);
+
+3) PBI measures (recap; they’ll work with these views)
+-- Metric-level (shows when Metric is on rows)
+Metric Weighted Score :=
+DIVIDE(
+    SUM('v_FactScore'[weighted_points]),
+    SUM('v_FactScore'[weight_basis])
+)
+
+-- MLO total (sum of metric points; includes zero-attempt metrics if you persisted them)
+MLO Total Score :=
+SUM('v_FactScore'[final_score])
+
+
+And your level-aware display (atomic only), or the agg-backed version if you’re loading the agg views. (You already have both patterns from earlier.)
