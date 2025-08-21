@@ -1,0 +1,160 @@
+CREATE OR ALTER PROCEDURE dbo.Build_Rollups
+  @PeriodKey int
+AS
+BEGIN
+  SET NOCOUNT ON;
+  SET XACT_ABORT ON;
+
+  DECLARE @PeriodDate date = DATEFROMPARTS(@PeriodKey / 100, @PeriodKey % 100, 1);
+
+  /* -------- 1) Active metrics (period) -------- */
+  IF OBJECT_ID('tempdb..#ActiveMetrics') IS NOT NULL DROP TABLE #ActiveMetrics;
+  CREATE TABLE #ActiveMetrics (complianceitemid int PRIMARY KEY);
+
+  INSERT #ActiveMetrics(complianceitemid)
+  SELECT DISTINCT civ.complianceitemid
+  FROM dbo.ComplianceItemVersions civ
+  JOIN dbo.ComplianceItems ci ON ci.complianceitemid = civ.complianceitemid
+  WHERE ci.active = 1
+    AND civ.active = 1
+    AND civ.effectivestartdate <= @PeriodDate
+    AND (@PeriodDate < ISNULL(civ.effectiveenddate,'9999-12-31'));
+
+  /* -------- 2) Roster & org maps (period) -------- */
+  IF OBJECT_ID('tempdb..#Roster') IS NOT NULL DROP TABLE #Roster;
+  CREATE TABLE #Roster (person_id int PRIMARY KEY);
+
+  INSERT #Roster(person_id)
+  SELECT DISTINCT person_id
+  FROM dbo.Roster_Period
+  WHERE period_key = @PeriodKey;
+
+  IF OBJECT_ID('tempdb..#PersonMap') IS NOT NULL DROP TABLE #PersonMap;
+  CREATE TABLE #PersonMap (
+    person_id int PRIMARY KEY,
+    mpo_id    int NULL,
+    area_id   int NULL,
+    region_id int NULL
+  );
+
+  INSERT #PersonMap(person_id, mpo_id, area_id, region_id)
+  SELECT r.person_id, po.mpo_id, po.area_id, po.region_id
+  FROM #Roster r
+  JOIN dbo.PersonOrg po ON po.person_id = r.person_id;
+
+  /* Distinct group lists */
+  IF OBJECT_ID('tempdb..#Groups_MPO') IS NOT NULL DROP TABLE #Groups_MPO;
+  CREATE TABLE #Groups_MPO (mpo_id int PRIMARY KEY);
+  INSERT #Groups_MPO(mpo_id) SELECT DISTINCT mpo_id FROM #PersonMap WHERE mpo_id IS NOT NULL;
+
+  IF OBJECT_ID('tempdb..#Groups_Area') IS NOT NULL DROP TABLE #Groups_Area;
+  CREATE TABLE #Groups_Area (area_id int PRIMARY KEY);
+  INSERT #Groups_Area(area_id) SELECT DISTINCT area_id FROM #PersonMap WHERE area_id IS NOT NULL;
+
+  IF OBJECT_ID('tempdb..#Groups_Region') IS NOT NULL DROP TABLE #Groups_Region;
+  CREATE TABLE #Groups_Region (region_id int PRIMARY KEY);
+  INSERT #Groups_Region(region_id) SELECT DISTINCT region_id FROM #PersonMap WHERE region_id IS NOT NULL;
+
+  /* -------- 3) Pre-aggregate fact by group+metric (restricted to roster) -------- */
+  IF OBJECT_ID('tempdb..#FactAgg_MPO') IS NOT NULL DROP TABLE #FactAgg_MPO;
+  CREATE TABLE #FactAgg_MPO (
+    mpo_id int NOT NULL,
+    complianceitemid int NOT NULL,
+    sum_wp decimal(19,6) NOT NULL,
+    sum_w  decimal(19,6) NOT NULL,
+    CONSTRAINT PK_FA_MPO PRIMARY KEY (mpo_id, complianceitemid)
+  );
+
+  INSERT #FactAgg_MPO (mpo_id, complianceitemid, sum_wp, sum_w)
+  SELECT po.mpo_id, ss.complianceitemid,
+         SUM(ss.weighted_points), SUM(ss.weight_basis)
+  FROM dbo.ScoreSnapshot ss
+  JOIN dbo.PersonOrg po ON po.person_id = ss.person_id
+  WHERE ss.period_key = @PeriodKey
+    AND EXISTS (SELECT 1 FROM #Roster r WHERE r.person_id = ss.person_id)
+  GROUP BY po.mpo_id, ss.complianceitemid;
+
+  IF OBJECT_ID('tempdb..#FactAgg_Area') IS NOT NULL DROP TABLE #FactAgg_Area;
+  CREATE TABLE #FactAgg_Area (
+    area_id int NOT NULL,
+    complianceitemid int NOT NULL,
+    sum_wp decimal(19,6) NOT NULL,
+    sum_w  decimal(19,6) NOT NULL,
+    CONSTRAINT PK_FA_Area PRIMARY KEY (area_id, complianceitemid)
+  );
+
+  INSERT #FactAgg_Area (area_id, complianceitemid, sum_wp, sum_w)
+  SELECT po.area_id, ss.complianceitemid,
+         SUM(ss.weighted_points), SUM(ss.weight_basis)
+  FROM dbo.ScoreSnapshot ss
+  JOIN dbo.PersonOrg po ON po.person_id = ss.person_id
+  WHERE ss.period_key = @PeriodKey
+    AND EXISTS (SELECT 1 FROM #Roster r WHERE r.person_id = ss.person_id)
+  GROUP BY po.area_id, ss.complianceitemid;
+
+  IF OBJECT_ID('tempdb..#FactAgg_Region') IS NOT NULL DROP TABLE #FactAgg_Region;
+  CREATE TABLE #FactAgg_Region (
+    region_id int NOT NULL,
+    complianceitemid int NOT NULL,
+    sum_wp decimal(19,6) NOT NULL,
+    sum_w  decimal(19,6) NOT NULL,
+    CONSTRAINT PK_FA_Region PRIMARY KEY (region_id, complianceitemid)
+  );
+
+  INSERT #FactAgg_Region (region_id, complianceitemid, sum_wp, sum_w)
+  SELECT po.region_id, ss.complianceitemid,
+         SUM(ss.weighted_points), SUM(ss.weight_basis)
+  FROM dbo.ScoreSnapshot ss
+  JOIN dbo.PersonOrg po ON po.person_id = ss.person_id
+  WHERE ss.period_key = @PeriodKey
+    AND EXISTS (SELECT 1 FROM #Roster r WHERE r.person_id = ss.person_id)
+  GROUP BY po.region_id, ss.complianceitemid;
+
+  /* -------- 4) Populate agg tables (cross join groups × active metrics, left join pre-agg) -------- */
+
+  -- MPO
+  DELETE FROM dbo.Agg_MPO_Metric WHERE period_key = @PeriodKey;
+
+  INSERT dbo.Agg_MPO_Metric (period_key, mpo_id, complianceitemid, sum_weighted_pts, total_weight)
+  SELECT
+    @PeriodKey,
+    gm.mpo_id,
+    am.complianceitemid,
+    ISNULL(f.sum_wp, 0.0),
+    ISNULL(f.sum_w,  0.0)
+  FROM #Groups_MPO gm
+  CROSS JOIN #ActiveMetrics am
+  LEFT JOIN #FactAgg_MPO f
+    ON f.mpo_id = gm.mpo_id AND f.complianceitemid = am.complianceitemid;
+
+  -- Area
+  DELETE FROM dbo.Agg_Area_Metric WHERE period_key = @PeriodKey;
+
+  INSERT dbo.Agg_Area_Metric (period_key, area_id, complianceitemid, sum_weighted_pts, total_weight)
+  SELECT
+    @PeriodKey,
+    ga.area_id,
+    am.complianceitemid,
+    ISNULL(f.sum_wp, 0.0),
+    ISNULL(f.sum_w,  0.0)
+  FROM #Groups_Area ga
+  CROSS JOIN #ActiveMetrics am
+  LEFT JOIN #FactAgg_Area f
+    ON f.area_id = ga.area_id AND f.complianceitemid = am.complianceitemid;
+
+  -- Region
+  DELETE FROM dbo.Agg_Region_Metric WHERE period_key = @PeriodKey;
+
+  INSERT dbo.Agg_Region_Metric (period_key, region_id, complianceitemid, sum_weighted_pts, total_weight)
+  SELECT
+    @PeriodKey,
+    gr.region_id,
+    am.complianceitemid,
+    ISNULL(f.sum_wp, 0.0),
+    ISNULL(f.sum_w,  0.0)
+  FROM #Groups_Region gr
+  CROSS JOIN #ActiveMetrics am
+  LEFT JOIN #FactAgg_Region f
+    ON f.region_id = gr.region_id AND f.complianceitemid = am.complianceitemid;
+END
+GO
